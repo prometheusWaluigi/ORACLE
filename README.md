@@ -33,6 +33,54 @@ Key design decisions:
 
 ---
 
+## Design Philosophy: Eigenvector Agile
+
+Most agent frameworks are built for derivative thinking. Try something, measure it, pivot to whatever worked. That's the right model when you're a startup groping in the dark for product-market fit — local gradient descent on an unknown landscape.
+
+ORACLE is built for a different problem: you already know what you're trying to do. You're not searching for the hill. You're trying to get taller.
+
+In linear algebra, an **eigenvector** of a matrix is a direction that doesn't change when the transformation is applied — it only scales. Applied to organizational or system design: your eigenvector is the thing you do that gets *stronger* every time you repeat it. Apple deepens design intuition. Amazon deepens logistical efficiency. Derivative optimization finds new hills; eigenvector alignment makes your existing hill a mountain.
+
+ORACLE encodes this distinction at the architectural level.
+
+### Derivative Agile vs. Eigenvector Agile
+
+| | Derivative Agile | Eigenvector Agile |
+|---|---|---|
+| Model | `∇f(x)` — follow the gradient | `Ax = λx` — amplify your direction |
+| Mode | Sprint → Pivot → Sprint | Sprint → Deepen → Sprint → Compound |
+| Suits | Startups finding product-market fit | Systems with a known identity to strengthen |
+| Memory | Forget fast, stay nimble | Remember everything, compound forever |
+| Failure mode | Never converges on identity | Ossifies if eigenvector is mis-identified |
+
+ORACLE is an eigenvector system. Its core direction — **typed coordination + recursive evaluation + compound memory** — is the thing that scales with repetition. Each design decision either deepens that direction or it doesn't belong in the codebase.
+
+### How This Shows Up in the Code
+
+**Compound Memory, Not Clean Slates**
+
+The three-tier memory system (working → episodic → semantic) is a direct implementation of recursive organizational intelligence. Working memory is task-scoped and cheap. Episodic memory captures what happened in this session so the Planner can replan from a position of knowledge, not amnesia. Semantic memory indexes learnings across sessions so the system gets smarter every time it runs. Each tier compounds what the previous tier couldn't afford to hold.
+
+**Deepening, Not Pivoting**
+
+The Planner doesn't just decompose goals — it replans from episodic context when tasks fail. A traditional retry loop forgets why it failed and tries again. ORACLE's replanning reads the episodic record, identifies what specifically went wrong, and constructs a graph that routes around the failure. This is `Sprint → Deepen`, not `Sprint → Pivot`.
+
+**Fractal Execution**
+
+The same structured pattern — goal → task graph → evaluation criterion — applies whether you're running a 3-task workflow or a 300-task research pipeline. The eigenvector (typed coordination) is visible at every scale: in a single agent's `complete_structured()` call, in the Executor's parallel dispatch, in the Planner's DAG construction. If a contribution breaks that self-similarity, it's fighting the framework's identity.
+
+**Evaluation as Memory Formation**
+
+The Evaluator doesn't just pass or fail tasks — when a task passes, `ExecutionContext.record_completion()` writes a structured summary to episodic memory and optionally indexes it in semantic memory. The act of evaluation is the act of remembering. Criteria that can't be checked programmatically use `llm_judge` with an explicit rubric, which itself becomes part of the episodic record. Nothing is thrown away.
+
+### What This Means for Contributors
+
+When you're adding a feature or agent, the right question isn't "is this useful?" It's "does this deepen ORACLE's core direction?" A new memory backend that improves recall quality: yes. A one-off integration that works around the task graph because it's faster to ship: no. The framework gets stronger by going deeper, not wider.
+
+> Find your eigenvector and sprint toward it, not away from it.
+
+---
+
 ## Architecture
 
 ```
