@@ -65,6 +65,12 @@ ORACLE uses different Claude models for different roles. Never hardcode a model 
 | Evaluator | `claude-sonnet-4-6` | Judgment calls need reliability, not just speed |
 | Critic/reviewer | `claude-sonnet-4-6` | Same |
 | Simple tool calls | `claude-haiku-4-5-20251001` | Cheap, fast, structured output |
+| VIBE | `claude-haiku-4-5-20251001` | Fast ingestion, temperature 0.3; over-precision is the failure mode |
+| ECHO | `claude-sonnet-4-6` | Reasoning needed for structural similarity; temperature 0.1 |
+| SAGE | `claude-sonnet-4-6` | Temperature 0.0; deterministic citation required |
+| LENS | `claude-sonnet-4-6` | Compression under uncertainty; temperature 0.2 |
+| MUSE | `claude-sonnet-4-6` | Divergent synthesis; temperature 0.7 |
+| ATLAS | `claude-sonnet-4-6` | Temperature 0.0; deterministic execution only |
 
 When adding a new model role, add it to `config/defaults.yaml` and document it in this table.
 
@@ -115,6 +121,62 @@ Subagents inherit from `BaseAgent` in `agents/base.py`. Key methods:
 Each agent has a `name` (registry key) and `description` (used by the Executor to decide which agent to dispatch a task to).
 
 When adding a new agent: register it in `agents/__init__.py`, write unit tests for its core methods, and document its specialty and limitations in a docstring on the class.
+
+---
+
+## The ORACLE Loop Agents (VIBE · ECHO · SAGE · LENS · MUSE · ATLAS)
+
+The six loop agents live in `agents/loop/` and share a single cross-agent contract: the `Huddle` Pydantic model defined in `agents/loop/huddle.py`. Every agent reads from and writes to a `Huddle` instance. Nothing else is shared state.
+
+### Hard invariants — never violate these
+
+**SAGE citations are mandatory.** Every `SageVerdict` must include at least one `citations` entry with a real `(policy_doc_id, section)` pair. After SAGE runs, the orchestrator calls `verify_sage_citations(verdict, policy_store)` which fetches each cited passage and confirms it exists. An uncited or hallucinated citation fails validation and triggers a single retry with the offending citation stripped from context. If the retry also fails validation, the huddle short-circuits to `escalated`.
+
+**ATLAS never improvises.** Before ATLAS calls `router.apply_config`, the orchestrator computes a SHA-256 hash of the `MusePlays.plays[chosen_id].config_diff` that MUSE produced and compares it to what ATLAS is about to apply. Any mismatch → `AtlasResult(status="aborted")`. Do not add "improvement" logic to ATLAS. It executes or it aborts.
+
+**HITL checkpoints are non-configurable.** Two checkpoints exist in the orchestrator and may not be removed or made optional:
+- `lens_low_clarity`: fires when `LensFrame.decision_clarity < 0.5`
+- `muse_human_gate`: fires when the selected play has `reversibility == "irreversible"` or `requires_human_approval == True`
+
+**The orchestrator does not reason.** If you find yourself putting conditional logic in `run_huddle()` that interprets agent output beyond schema validation and the short-circuit matrix, stop — that logic belongs inside the relevant agent's system prompt.
+
+### Memory mapping for the loop
+
+| Tier | Loop role |
+|---|---|
+| Working | Live `Huddle` object during a session; per-node `VibeReport`, `EchoReport`, etc. |
+| Episodic | Every closed `Huddle` archived via `huddle.archive()`; ECHO's primary search corpus |
+| Semantic | Pattern library; long-horizon similarity search across the full huddle archive |
+
+ECHO is the only node that reads from episodic and semantic memory. All other nodes read only from the current `Huddle` object in working memory.
+
+### Known agent failure modes and their mitigations
+
+| Failure | Where | Mitigation already in spec |
+|---|---|---|
+| Schema drift in output | Any node | Strict Pydantic validation + one retry; never silent coercion |
+| Citation hallucination | SAGE | Post-validate every `(doc_id, section)` against policy store |
+| Recency bias | ECHO | Time-weighted decay on similarity scoring in `echo.search_huddles` |
+| Play-hoarding (MUSE ignores priors) | MUSE | If `prior_plays.search` returns similarity > 0.9, MUSE must include it and argue against it explicitly |
+| ATLAS spec drift | ATLAS | Input hash check before every `router.apply_config` call |
+
+### Huddle file layout
+
+```
+agents/
+└── loop/
+    ├── __init__.py
+    ├── huddle.py       # Huddle, VibeReport, EchoReport, SageVerdict, LensFrame, MusePlays, AtlasResult
+    ├── vibe.py         # VibeAgent
+    ├── echo.py         # EchoAgent
+    ├── sage.py         # SageAgent
+    ├── lens.py         # LensAgent
+    ├── muse.py         # MuseAgent
+    ├── atlas.py        # AtlasAgent
+    └── orchestrator.py # run_huddle() state machine
+```
+
+All `Huddle` field types are Pydantic v2 models. All agents use `complete_structured(schema=<OutputModel>)`. No agent in the loop may import from another agent in the loop — they communicate exclusively through the `Huddle` object passed by the orchestrator.
 
 ---
 
@@ -178,6 +240,10 @@ Never commit secrets. Never read secrets from files in the repo — only from en
 - **Skipping eval criteria.** Every task needs one. `llm_judge` with a clear rubric is acceptable when no programmatic criterion exists.
 - **Synchronous Anthropic calls in async code.** Use `await client.messages.create(...)` — the SDK is fully async. Blocking in an async context starves the executor's parallel task loop.
 - **Over-provisioning Opus.** Use Haiku for structured extraction and simple tool calls. Save Opus for planning and novel reasoning. API costs are real.
+- **Reasoning inside the orchestrator.** `run_huddle()` is a state machine. Any logic that interprets agent output beyond schema validation and the short-circuit table belongs in the agent that produces the output.
+- **Skipping citation validation on SAGE.** The post-validation step is not optional boilerplate. Unchecked SAGE verdicts that cite hallucinated policy sections are a compliance liability in regulated deployments.
+- **Treating ATLAS abort as a retry trigger.** When ATLAS aborts, the huddle escalates to humans. Do not add automatic retry logic. The abort means the world changed between MUSE proposing the play and ATLAS attempting to apply it; a human needs to look at this.
+- **Writing to memory from loop agents directly.** VIBE, ECHO, SAGE, LENS, MUSE must not call `ExecutionContext.record_completion()` or any memory store directly. Only ATLAS (via `huddle.archive()`) and the orchestrator write to persistent storage.
 
 ---
 
